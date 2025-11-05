@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "routes": [
+    {
+      "src": "/webhook",
+      "dest": "/api/bot.py",
+      "methods": ["POST"]
+    },
+    {
+      "src": "/",
+      "dest": "/api/bot.py",
+      "methods": ["GET"]
+    }
+  ]
+}
