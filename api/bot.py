@@ -77,6 +77,14 @@ def init_db():
         )
     ''')
     
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_states (
+            user_id TEXT PRIMARY KEY,
+            state TEXT,
+            data TEXT
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -118,17 +126,6 @@ class RubikaBot:
         except Exception as e:
             print(f"Error deleting message: {e}")
             return None
-    
-    def get_chat(self, chat_id):
-        url = f"{self.base_url}/getChat"
-        data = {"chat_id": chat_id}
-        
-        try:
-            response = requests.post(url, json=data)
-            return response.json()
-        except Exception as e:
-            print(f"Error getting chat: {e}")
-            return None
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -160,7 +157,6 @@ class handler(BaseHTTPRequestHandler):
         
         print(f"🖱 Button clicked: {button_id} by {user_id}")
         
-        # پردازش کلیک دکمه‌ها
         if button_id.startswith('join_'):
             channel = button_id.replace('join_', '')
             bot.send_message(user_id, f"✅ لطفاً در کانال عضو شوید: {channel}")
@@ -175,7 +171,6 @@ class handler(BaseHTTPRequestHandler):
             message = update['new_message']
             chat_id = update['chat_id']
             
-            # بررسی اگر پیام از پیوی هست
             if chat_id.startswith('u'):
                 self.handle_private_message(bot, message)
             else:
@@ -187,7 +182,6 @@ class handler(BaseHTTPRequestHandler):
         
         print(f"📩 Private message from {user_id}: {text}")
         
-        # مدیریت از طریق پیوی
         if text == '/start':
             welcome_text = """🤖 **ربات مدیریت گروه**
 
@@ -212,11 +206,8 @@ class handler(BaseHTTPRequestHandler):
         elif text.startswith('لیست گروه‌ها'):
             self.list_groups(bot, user_id)
         
-        elif text.startswith('افزودن ادمین'):
-            self.request_password(bot, user_id, text, 'add_admin')
-        
-        elif text.startswith('حذف ادمین'):
-            self.request_password(bot, user_id, text, 'remove_admin')
+        elif text.startswith('افزودن ادمین') or text.startswith('حذف ادمین'):
+            self.request_password(bot, user_id, text)
     
     def handle_group_message(self, bot, message, chat_id):
         user_id = message['sender_id']
@@ -225,35 +216,28 @@ class handler(BaseHTTPRequestHandler):
         
         print(f"👥 Group message in {chat_id} from {user_id}: {text}")
         
-        # بررسی محتوای ممنوعه
         if self.contains_banned_content(text):
             bot.delete_message(chat_id, message_id)
             self.handle_warning(bot, chat_id, user_id, "ارسال محتوای ممنوعه")
             return
         
-        # بررسی عضویت اجباری
         if self.check_membership_required(chat_id) and not self.is_member(user_id, chat_id):
             bot.delete_message(chat_id, message_id)
             self.send_membership_required(bot, user_id, chat_id)
             return
         
-        # پردازش پاسخ‌های خودکار
         self.check_auto_responses(bot, chat_id, text)
     
     def contains_banned_content(self, text):
-        # بررسی لینک
         if re.search(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', text):
             return True
         
-        # بررسی آیدی
         if '@' in text:
             return True
         
-        # بررسی پیام بلند
         if len(text) > 200:
             return True
         
-        # بررسی کلمات ممنوعه از دیتابیس
         conn = sqlite3.connect('bot.db')
         cursor = conn.cursor()
         cursor.execute("SELECT word FROM banned_words")
@@ -270,7 +254,6 @@ class handler(BaseHTTPRequestHandler):
         conn = sqlite3.connect('bot.db')
         cursor = conn.cursor()
         
-        # دریافت یا ایجاد رکورد کاربر
         cursor.execute('''
             INSERT OR REPLACE INTO user_warnings (user_id, group_id, warnings, last_warning)
             VALUES (?, ?, COALESCE((SELECT warnings FROM user_warnings WHERE user_id=? AND group_id=?), 0) + 1, ?)
@@ -279,7 +262,6 @@ class handler(BaseHTTPRequestHandler):
         cursor.execute("SELECT warnings FROM user_warnings WHERE user_id=? AND group_id=?", (user_id, chat_id))
         warnings = cursor.fetchone()[0]
         
-        # دریافت تنظیمات گروه
         cursor.execute("SELECT max_warnings, mute_hours FROM group_settings WHERE group_id=?", (chat_id,))
         settings = cursor.fetchone()
         
@@ -289,7 +271,6 @@ class handler(BaseHTTPRequestHandler):
             max_warnings, mute_hours = 3, 5
         
         if warnings >= max_warnings:
-            # سکوت کاربر
             mute_until = datetime.now() + timedelta(hours=mute_hours)
             cursor.execute(
                 "UPDATE user_warnings SET muted_until=?, warnings=0 WHERE user_id=? AND group_id=?",
@@ -309,7 +290,6 @@ class handler(BaseHTTPRequestHandler):
             conn = sqlite3.connect('bot.db')
             cursor = conn.cursor()
             
-            # افزودن گروه به دیتابیس
             cursor.execute(
                 "INSERT OR IGNORE INTO groups (group_id, group_name, owner_id) VALUES (?, ?, ?)",
                 (group_info, group_info, user_id)
@@ -317,8 +297,6 @@ class handler(BaseHTTPRequestHandler):
             
             if cursor.rowcount > 0:
                 bot.send_message(user_id, f"✅ گروه '{group_info}' با موفقیت اضافه شد")
-                
-                # ایجاد تنظیمات پیشفرض برای گروه
                 cursor.execute(
                     "INSERT OR IGNORE INTO group_settings (group_id) VALUES (?)",
                     (group_info,)
@@ -350,16 +328,14 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             bot.send_message(user_id, f"❌ خطا در دریافت لیست گروه‌ها: {e}")
     
-    def request_password(self, bot, user_id, text, action):
-        # درخواست رمز برای مدیریت ادمین‌ها
+    def request_password(self, bot, user_id, text):
         bot.send_message(user_id, "🔐 لطفاً رمز مدیریت را وارد کنید:")
         
-        # ذخیره وضعیت کاربر برای مرحله بعد
         conn = sqlite3.connect('bot.db')
         cursor = conn.cursor()
         cursor.execute(
             "INSERT OR REPLACE INTO user_states (user_id, state, data) VALUES (?, ?, ?)",
-            (user_id, f"waiting_password_{action}", text)
+            (user_id, "waiting_password", text)
         )
         conn.commit()
         conn.close()
@@ -374,8 +350,6 @@ class handler(BaseHTTPRequestHandler):
         return result and result[0]
     
     def is_member(self, user_id, chat_id):
-        # این تابع باید چک کند که کاربر در کانال/گروه اجباری عضو هست یا نه
-        # فعلاً true برمی‌گرداند (پیاده‌سازی کامل نیاز به API خاص دارد)
         return True
     
     def send_membership_required(self, bot, user_id, chat_id):
@@ -437,19 +411,3 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"🤖 ربات مدیریت گروه روبیکا فعال است!")
-
-# ایجاد جدول وضعیت کاربران
-def create_user_states_table():
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_states (
-            user_id TEXT PRIMARY KEY,
-            state TEXT,
-            data TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-create_user_states_table()
